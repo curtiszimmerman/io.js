@@ -1963,7 +1963,7 @@ void DLOpen(const FunctionCallbackInfo<Value>& args) {
 
   CHECK_EQ(modpending, nullptr);
 
-  if (args.Length() < 2) {
+  if (args.Length() != 2) {
     env->ThrowError("process.dlopen takes exactly 2 arguments.");
     return;
   }
@@ -2552,7 +2552,9 @@ void SetupProcessObject(Environment* env,
 
   const char http_parser_version[] = NODE_STRINGIFY(HTTP_PARSER_VERSION_MAJOR)
                                      "."
-                                     NODE_STRINGIFY(HTTP_PARSER_VERSION_MINOR);
+                                     NODE_STRINGIFY(HTTP_PARSER_VERSION_MINOR)
+                                     "."
+                                     NODE_STRINGIFY(HTTP_PARSER_VERSION_PATCH);
   READONLY_PROPERTY(versions,
                     "http_parser",
                     FIXED_ONE_BYTE_STRING(env->isolate(), http_parser_version));
@@ -2870,11 +2872,11 @@ static bool ParseDebugOpt(const char* arg) {
 }
 
 static void PrintHelp() {
-  printf("Usage: node [options] [ -e script | script.js ] [arguments] \n"
-         "       node debug script.js [arguments] \n"
+  printf("Usage: iojs [options] [ -e script | script.js ] [arguments] \n"
+         "       iojs debug script.js [arguments] \n"
          "\n"
          "Options:\n"
-         "  -v, --version        print node's version\n"
+         "  -v, --version        print io.js version\n"
          "  -e, --eval script    evaluate script\n"
          "  -p, --print          evaluate script and print result\n"
          "  -i, --interactive    always enter the REPL even if stdin\n"
@@ -3337,14 +3339,6 @@ void Init(int* argc,
                 DispatchDebugMessagesAsyncCallback);
   uv_unref(reinterpret_cast<uv_handle_t*>(&dispatch_debug_messages_async));
 
-  // TODO(bnoordhuis) V8 3.32 is unshipping Harmony classes for the moment.
-  // We're currently at 3.31, disable classes for feature parity.  Remove
-  // again when we upgrade.
-  V8::SetFlagsFromString("--noharmony_classes",
-                         sizeof("--noharmony_classes") - 1);
-  V8::SetFlagsFromString("--noharmony_object_literals",
-                         sizeof("--noharmony_object_literals") - 1);
-
 #if defined(NODE_V8_OPTIONS)
   // Should come before the call to V8::SetFlagsFromCommandLine()
   // so the user can disable a flag --foo at run-time by passing
@@ -3434,6 +3428,11 @@ void Init(int* argc,
   if (!use_debug_agent) {
     RegisterDebugSignalHandler();
   }
+
+  // We should set node_is_initialized here instead of in node::Start,
+  // otherwise embedders using node::Init to initialize everything will not be
+  // able to set it and native modules will not load for them.
+  node_is_initialized = true;
 }
 
 
@@ -3642,7 +3641,6 @@ int Start(int argc, char** argv) {
 
   int code;
   V8::Initialize();
-  node_is_initialized = true;
 
   // Fetch a reference to the main isolate, so we have a reference to it
   // even when we need it to access it from another (debugger) thread.

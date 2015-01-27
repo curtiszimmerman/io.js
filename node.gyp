@@ -1,6 +1,6 @@
 {
   'variables': {
-    'v8_use_snapshot%': 'true',
+    'v8_use_snapshot%': 'false',
     'node_use_dtrace%': 'false',
     'node_use_etw%': 'false',
     'node_use_perfctr%': 'false',
@@ -322,6 +322,9 @@
           'sources': [
             'src/res/node.rc',
           ],
+          'defines!': [
+            'NODE_PLATFORM="win"',
+          ],
           'defines': [
             'FD_SETSIZE=1024',
             # we need to use node's preferred "win32" rather than gyp's preferred "win"
@@ -378,9 +381,6 @@
         }],
       ],
       'msvs_settings': {
-        'VCLinkerTool': {
-          'SubSystem': 1, # /subsystem:console
-        },
         'VCManifestTool': {
           'EmbedManifest': 'true',
           'AdditionalManifestFiles': 'src/res/node.exe.extra.manifest'

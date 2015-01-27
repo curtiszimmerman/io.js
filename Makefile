@@ -2,7 +2,6 @@
 
 BUILDTYPE ?= Release
 PYTHON ?= python
-NINJA ?= ninja
 DESTDIR ?=
 SIGN ?=
 PREFIX ?= /usr/local
@@ -20,13 +19,6 @@ NODE_G_EXE = iojs_g$(EXEEXT)
 # or set the V environment variable to an empty string.
 V ?= 1
 
-USE_NINJA ?= 0
-ifeq ($(USE_NINJA),1)
-ifneq ($(V),)
-NINJA := $(NINJA) -v
-endif
-endif
-
 # BUILDTYPE=Debug builds both release and debug builds. If you want to compile
 # just the debug build, run `make -C out BUILDTYPE=Debug` instead.
 ifeq ($(BUILDTYPE),Release)
@@ -39,15 +31,6 @@ endif
 # to check for changes.
 .PHONY: $(NODE_EXE) $(NODE_G_EXE)
 
-ifeq ($(USE_NINJA),1)
-$(NODE_EXE): config.gypi
-	$(NINJA) -C out/Release/
-	ln -fs out/Release/$(NODE_EXE) $@
-
-$(NODE_G_EXE): config.gypi
-	$(NINJA) -C out/Debug/
-	ln -fs out/Debug/$(NODE_EXE) $@
-else
 $(NODE_EXE): config.gypi out/Makefile
 	$(MAKE) -C out BUILDTYPE=Release V=$(V)
 	ln -fs out/Release/$(NODE_EXE) $@
@@ -55,15 +38,9 @@ $(NODE_EXE): config.gypi out/Makefile
 $(NODE_G_EXE): config.gypi out/Makefile
 	$(MAKE) -C out BUILDTYPE=Debug V=$(V)
 	ln -fs out/Debug/$(NODE_EXE) $@
-endif
 
 out/Makefile: common.gypi deps/uv/uv.gyp deps/http_parser/http_parser.gyp deps/zlib/zlib.gyp deps/v8/build/toolchain.gypi deps/v8/build/features.gypi deps/v8/tools/gyp/v8.gyp node.gyp config.gypi
-ifeq ($(USE_NINJA),1)
-	touch out/Makefile
-	$(PYTHON) tools/gyp_node.py -f ninja
-else
 	$(PYTHON) tools/gyp_node.py -f make
-endif
 
 config.gypi: configure
 	if [ -f $@ ]; then
@@ -91,6 +68,7 @@ distclean:
 	-rm -rf node_modules
 	-rm -rf deps/icu
 	-rm -rf deps/icu4c*.tgz deps/icu4c*.zip deps/icu-tmp
+	-rm -f $(BINARYTAR).* $(TARBALL).*
 
 test: all
 	$(PYTHON) tools/test.py --mode=release message parallel sequential -J
@@ -223,8 +201,10 @@ docclean:
 
 RAWVER=$(shell $(PYTHON) tools/getnodeversion.py)
 VERSION=v$(RAWVER)
+FULLVERSION=$(VERSION)
 RELEASE=$(shell $(PYTHON) tools/getnodeisrelease.py)
 PLATFORM=$(shell uname | tr '[:upper:]' '[:lower:]')
+NPMVERSION=v$(shell cat deps/npm/package.json | grep '"version"' | sed 's/^[^:]*: "\([^"]*\)",.*/\1/')
 ifeq ($(findstring x86_64,$(shell uname -m)),x86_64)
 DESTCPU ?= x64
 else
@@ -239,11 +219,11 @@ else
 ARCH=x86
 endif
 endif
-TARNAME=iojs-$(VERSION)
 ifdef NIGHTLY
 TAG = nightly-$(NIGHTLY)
-TARNAME=iojs-$(VERSION)-$(TAG)
+FULLVERSION=$(VERSION)-$(TAG)
 endif
+TARNAME=iojs-$(FULLVERSION)
 TARBALL=$(TARNAME).tar
 BINARYNAME=$(TARNAME)-$(PLATFORM)-$(ARCH)
 BINARYTAR=$(BINARYNAME).tar
@@ -287,10 +267,10 @@ pkg: $(PKG)
 $(PKG): release-only
 	rm -rf $(PKGDIR)
 	rm -rf out/deps out/Release
-	$(PYTHON) ./configure --without-snapshot --dest-cpu=ia32 --tag=$(TAG)
+	$(PYTHON) ./configure --dest-cpu=ia32 --tag=$(TAG)
 	$(MAKE) install V=$(V) DESTDIR=$(PKGDIR)/32
 	rm -rf out/deps out/Release
-	$(PYTHON) ./configure --without-snapshot --dest-cpu=x64 --tag=$(TAG)
+	$(PYTHON) ./configure --dest-cpu=x64 --tag=$(TAG)
 	$(MAKE) install V=$(V) DESTDIR=$(PKGDIR)
 	SIGN="$(APP_SIGN)" PKGDIR="$(PKGDIR)" bash tools/osx-codesign.sh
 	lipo $(PKGDIR)/32/usr/local/bin/iojs \
@@ -299,6 +279,7 @@ $(PKG): release-only
 		-create
 	mv $(PKGDIR)/usr/local/bin/iojs-universal $(PKGDIR)/usr/local/bin/iojs
 	rm -rf $(PKGDIR)/32
+	cat tools/osx-pkg.pmdoc/index.xml.tmpl | sed -e 's|__iojsversion__|'$(FULLVERSION)'|g' | sed -e 's|__npmversion__|'$(NPMVERSION)'|g' > tools/osx-pkg.pmdoc/index.xml
 	$(packagemaker) \
 		--id "org.nodejs.Node" \
 		--doc tools/osx-pkg.pmdoc \
@@ -327,7 +308,7 @@ tar: $(TARBALL)
 $(BINARYTAR): release-only
 	rm -rf $(BINARYNAME)
 	rm -rf out/deps out/Release
-	$(PYTHON) ./configure --prefix=/ --without-snapshot --dest-cpu=$(DESTCPU) --tag=$(TAG) $(CONFIG_FLAGS)
+	$(PYTHON) ./configure --prefix=/ --dest-cpu=$(DESTCPU) --tag=$(TAG) $(CONFIG_FLAGS)
 	$(MAKE) install DESTDIR=$(BINARYNAME) V=$(V) PORTABLE=1
 	cp README.md $(BINARYNAME)
 	cp LICENSE $(BINARYNAME)
@@ -344,7 +325,7 @@ binary: $(BINARYTAR)
 
 $(PKGSRC): release-only
 	rm -rf dist out
-	$(PYTHON) configure --prefix=/ --without-snapshot \
+	$(PYTHON) configure --prefix=/ \
 		--dest-cpu=$(DESTCPU) --tag=$(TAG) $(CONFIG_FLAGS)
 	$(MAKE) install DESTDIR=dist
 	(cd dist; find * -type f | sort) > packlist
@@ -401,10 +382,10 @@ bench-idle:
 	./$(NODE_EXE) benchmark/idle_clients.js &
 
 jslintfix:
-	PYTHONPATH=tools/closure_linter/ $(PYTHON) tools/closure_linter/closure_linter/fixjsstyle.py --strict --nojsdoc -r lib/ -r src/ --exclude_files lib/punycode.js
+	PYTHONPATH=tools/closure_linter/:tools/gflags/ $(PYTHON) tools/closure_linter/closure_linter/fixjsstyle.py --strict --nojsdoc -r lib/ -r src/ --exclude_files lib/punycode.js
 
 jslint:
-	PYTHONPATH=tools/closure_linter/ $(PYTHON) tools/closure_linter/closure_linter/gjslint.py --unix_mode --strict --nojsdoc -r lib/ -r src/ --exclude_files lib/punycode.js
+	PYTHONPATH=tools/closure_linter/:tools/gflags/ $(PYTHON) tools/closure_linter/closure_linter/gjslint.py --unix_mode --strict --nojsdoc -r lib/ -r src/ --exclude_files lib/punycode.js
 
 CPPLINT_EXCLUDE ?=
 CPPLINT_EXCLUDE += src/node_dtrace.cc
