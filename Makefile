@@ -174,9 +174,6 @@ $(apidoc_dirs):
 out/doc/api/assets/%: doc/api_assets/% out/doc/api/assets/
 	cp $< $@
 
-out/doc/changelog.html: CHANGELOG.md doc/changelog-head.html doc/changelog-foot.html tools/build-changelog.sh $(NODE_EXE)
-	bash tools/build-changelog.sh
-
 out/doc/%: doc/%
 	cp -r $< $@
 
@@ -185,13 +182,6 @@ out/doc/api/%.json: doc/api/%.markdown $(NODE_EXE)
 
 out/doc/api/%.html: doc/api/%.markdown $(NODE_EXE)
 	out/Release/$(NODE_EXE) tools/doc/generate.js --format=html --template=doc/template.html $< > $@
-
-email.md: CHANGELOG.md tools/email-footer.md
-	bash tools/changelog-head.sh | sed 's|^\* #|* \\#|g' > $@
-	cat tools/email-footer.md | sed -e 's|__VERSION__|'$(VERSION)'|g' >> $@
-
-blog.html: email.md
-	cat $< | ./$(NODE_EXE) tools/doc/node_modules/.bin/marked > $@
 
 docopen: out/doc/api/all.html
 	-google-chrome out/doc/api/all.html
@@ -369,7 +359,13 @@ bench-array: all
 bench-buffer: all
 	@$(NODE) benchmark/common.js buffers
 
-bench-all: bench bench-misc bench-array bench-buffer
+bench-url: all
+	@$(NODE) benchmark/common.js url
+
+bench-events: all
+	@$(NODE) benchmark/common.js events
+
+bench-all: bench bench-misc bench-array bench-buffer bench-url bench-events
 
 bench: bench-net bench-http bench-fs bench-tls
 
@@ -389,8 +385,9 @@ jslint:
 
 CPPLINT_EXCLUDE ?=
 CPPLINT_EXCLUDE += src/node_dtrace.cc
-CPPLINT_EXCLUDE += src/node_dtrace.cc
+CPPLINT_EXCLUDE += src/node_lttng.cc
 CPPLINT_EXCLUDE += src/node_root_certs.h
+CPPLINT_EXCLUDE += src/node_lttng_tp.h
 CPPLINT_EXCLUDE += src/node_win32_perfctr_provider.cc
 CPPLINT_EXCLUDE += src/queue.h
 CPPLINT_EXCLUDE += src/tree.h

@@ -189,6 +189,7 @@ test_run_tests_SOURCES = test/blackhole-server.c \
                          test/test-pipe-sendmsg.c \
                          test/test-pipe-server-close.c \
                          test/test-pipe-close-stdout-read-stdin.c \
+                         test/test-pipe-set-non-blocking.c \
                          test/test-platform-output.c \
                          test/test-poll-close.c \
                          test/test-poll-close-doesnt-corrupt-stack.c \
@@ -303,6 +304,7 @@ endif
 
 if LINUX
 include_HEADERS += include/uv-linux.h
+libuv_la_CFLAGS += -D_GNU_SOURCE
 libuv_la_SOURCES += src/unix/linux-core.c \
                     src/unix/linux-inotify.c \
                     src/unix/linux-syscalls.c \

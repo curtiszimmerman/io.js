@@ -165,6 +165,7 @@ inline Environment::Environment(v8::Local<v8::Context> context,
       isolate_data_(IsolateData::GetOrCreate(context->GetIsolate(), loop)),
       using_smalloc_alloc_cb_(false),
       using_domains_(false),
+      using_asyncwrap_(false),
       printed_error_(false),
       debugger_agent_(this),
       context_(context->GetIsolate(), context) {
@@ -174,9 +175,6 @@ inline Environment::Environment(v8::Local<v8::Context> context,
   set_binding_cache_object(v8::Object::New(isolate()));
   set_module_load_list_array(v8::Array::New(isolate()));
   RB_INIT(&cares_task_list_);
-  QUEUE_INIT(&req_wrap_queue_);
-  QUEUE_INIT(&handle_wrap_queue_);
-  QUEUE_INIT(&handle_cleanup_queue_);
   handle_cleanup_waiting_ = 0;
 }
 
@@ -192,11 +190,7 @@ inline Environment::~Environment() {
 }
 
 inline void Environment::CleanupHandles() {
-  while (!QUEUE_EMPTY(&handle_cleanup_queue_)) {
-    QUEUE* q = QUEUE_HEAD(&handle_cleanup_queue_);
-    QUEUE_REMOVE(q);
-
-    HandleCleanup* hc = ContainerOf(&HandleCleanup::handle_cleanup_queue_, q);
+  while (HandleCleanup* hc = handle_cleanup_queue_.PopFront()) {
     handle_cleanup_waiting_++;
     hc->cb_(this, hc->handle_, hc->arg_);
     delete hc;
@@ -258,8 +252,7 @@ inline uv_check_t* Environment::idle_check_handle() {
 inline void Environment::RegisterHandleCleanup(uv_handle_t* handle,
                                                HandleCleanupCb cb,
                                                void *arg) {
-  HandleCleanup* hc = new HandleCleanup(handle, cb, arg);
-  QUEUE_INSERT_TAIL(&handle_cleanup_queue_, &hc->handle_cleanup_queue_);
+  handle_cleanup_queue_.PushBack(new HandleCleanup(handle, cb, arg));
 }
 
 inline void Environment::FinishHandleCleanup(uv_handle_t* handle) {
@@ -296,6 +289,14 @@ inline bool Environment::using_domains() const {
 
 inline void Environment::set_using_domains(bool value) {
   using_domains_ = value;
+}
+
+inline bool Environment::using_asyncwrap() const {
+  return using_asyncwrap_;
+}
+
+inline void Environment::set_using_asyncwrap(bool value) {
+  using_asyncwrap_ = value;
 }
 
 inline bool Environment::printed_error() const {
@@ -377,9 +378,10 @@ inline void Environment::ThrowErrnoException(int errorno,
 inline void Environment::ThrowUVException(int errorno,
                                           const char* syscall,
                                           const char* message,
-                                          const char* path) {
+                                          const char* path,
+                                          const char* dest) {
   isolate()->ThrowException(
-      UVException(isolate(), errorno, syscall, message, path));
+      UVException(isolate(), errorno, syscall, message, path, dest));
 }
 
 inline v8::Local<v8::FunctionTemplate>

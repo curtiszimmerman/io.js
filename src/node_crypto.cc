@@ -587,6 +587,8 @@ void SecureContext::AddCACert(const FunctionCallbackInfo<Value>& args) {
   Environment* env = Environment::GetCurrent(args);
 
   SecureContext* sc = Unwrap<SecureContext>(args.Holder());
+  ClearErrorOnReturn clear_error_on_return;
+  (void) &clear_error_on_return;  // Silence compiler warning.
 
   if (args.Length() != 1) {
     return env->ThrowTypeError("Bad parameter");
@@ -647,6 +649,8 @@ void SecureContext::AddCRL(const FunctionCallbackInfo<Value>& args) {
 
 void SecureContext::AddRootCerts(const FunctionCallbackInfo<Value>& args) {
   SecureContext* sc = Unwrap<SecureContext>(args.Holder());
+  ClearErrorOnReturn clear_error_on_return;
+  (void) &clear_error_on_return;  // Silence compiler warning.
 
   CHECK_EQ(sc->ca_store_, nullptr);
 
@@ -682,6 +686,8 @@ void SecureContext::AddRootCerts(const FunctionCallbackInfo<Value>& args) {
 
 void SecureContext::SetCiphers(const FunctionCallbackInfo<Value>& args) {
   SecureContext* sc = Unwrap<SecureContext>(args.Holder());
+  ClearErrorOnReturn clear_error_on_return;
+  (void) &clear_error_on_return;  // Silence compiler warning.
 
   if (args.Length() != 1 || !args[0]->IsString()) {
     return sc->env()->ThrowTypeError("Bad parameter");
@@ -721,6 +727,8 @@ void SecureContext::SetECDHCurve(const FunctionCallbackInfo<Value>& args) {
 void SecureContext::SetDHParam(const FunctionCallbackInfo<Value>& args) {
   SecureContext* sc = Unwrap<SecureContext>(args.This());
   Environment* env = sc->env();
+  ClearErrorOnReturn clear_error_on_return;
+  (void) &clear_error_on_return;  // Silence compiler warning.
 
   // Auto DH is not supported in openssl 1.0.1, so dhparam needs
   // to be specifed explicitly
@@ -825,6 +833,8 @@ void SecureContext::LoadPKCS12(const FunctionCallbackInfo<Value>& args) {
   bool ret = false;
 
   SecureContext* sc = Unwrap<SecureContext>(args.Holder());
+  ClearErrorOnReturn clear_error_on_return;
+  (void) &clear_error_on_return;  // Silence compiler warning.
 
   if (args.Length() < 1) {
     return env->ThrowTypeError("Bad parameter");
@@ -1089,15 +1099,9 @@ void SSLWrap<Base>::OnClientHello(void* arg,
 
 
 static bool SafeX509ExtPrint(BIO* out, X509_EXTENSION* ext) {
-  // Only alt_name is escaped at the moment
-  if (OBJ_obj2nid(ext->object) != NID_subject_alt_name)
-    return false;
-
   const X509V3_EXT_METHOD* method = X509V3_EXT_get(ext);
-  if (method == NULL || method->it == NULL)
-    return false;
 
-  if (method->i2v != reinterpret_cast<X509V3_EXT_I2V>(i2v_GENERAL_NAMES))
+  if (method != X509V3_EXT_get_nid(NID_subject_alt_name))
     return false;
 
   const unsigned char* p = ext->value->data;
@@ -2750,19 +2754,10 @@ void CipherBase::Update(const FunctionCallbackInfo<Value>& args) {
 
   // Only copy the data if we have to, because it's a string
   if (args[0]->IsString()) {
-    Local<String> string = args[0].As<String>();
-    enum encoding encoding = ParseEncoding(env->isolate(), args[1], BINARY);
-    if (!StringBytes::IsValidString(env->isolate(), string, encoding))
-      return env->ThrowTypeError("Bad input string");
-    size_t buflen = StringBytes::StorageSize(env->isolate(), string, encoding);
-    char* buf = new char[buflen];
-    size_t written = StringBytes::Write(env->isolate(),
-                                        buf,
-                                        buflen,
-                                        string,
-                                        encoding);
-    r = cipher->Update(buf, written, &out, &out_len);
-    delete[] buf;
+    StringBytes::InlineDecoder decoder;
+    if (!decoder.Decode(env, args[0].As<String>(), args[1], BINARY))
+      return;
+    r = cipher->Update(decoder.out(), decoder.size(), &out, &out_len);
   } else {
     char* buf = Buffer::Data(args[0]);
     size_t buflen = Buffer::Length(args[0]);
@@ -2929,19 +2924,10 @@ void Hmac::HmacUpdate(const FunctionCallbackInfo<Value>& args) {
   // Only copy the data if we have to, because it's a string
   bool r;
   if (args[0]->IsString()) {
-    Local<String> string = args[0].As<String>();
-    enum encoding encoding = ParseEncoding(env->isolate(), args[1], BINARY);
-    if (!StringBytes::IsValidString(env->isolate(), string, encoding))
-      return env->ThrowTypeError("Bad input string");
-    size_t buflen = StringBytes::StorageSize(env->isolate(), string, encoding);
-    char* buf = new char[buflen];
-    size_t written = StringBytes::Write(env->isolate(),
-                                        buf,
-                                        buflen,
-                                        string,
-                                        encoding);
-    r = hmac->HmacUpdate(buf, written);
-    delete[] buf;
+    StringBytes::InlineDecoder decoder;
+    if (!decoder.Decode(env, args[0].As<String>(), args[1], BINARY))
+      return;
+    r = hmac->HmacUpdate(decoder.out(), decoder.size());
   } else {
     char* buf = Buffer::Data(args[0]);
     size_t buflen = Buffer::Length(args[0]);
@@ -3053,19 +3039,10 @@ void Hash::HashUpdate(const FunctionCallbackInfo<Value>& args) {
   // Only copy the data if we have to, because it's a string
   bool r;
   if (args[0]->IsString()) {
-    Local<String> string = args[0].As<String>();
-    enum encoding encoding = ParseEncoding(env->isolate(), args[1], BINARY);
-    if (!StringBytes::IsValidString(env->isolate(), string, encoding))
-      return env->ThrowTypeError("Bad input string");
-    size_t buflen = StringBytes::StorageSize(env->isolate(), string, encoding);
-    char* buf = new char[buflen];
-    size_t written = StringBytes::Write(env->isolate(),
-                                        buf,
-                                        buflen,
-                                        string,
-                                        encoding);
-    r = hash->HashUpdate(buf, written);
-    delete[] buf;
+    StringBytes::InlineDecoder decoder;
+    if (!decoder.Decode(env, args[0].As<String>(), args[1], BINARY))
+      return;
+    r = hash->HashUpdate(decoder.out(), decoder.size());
   } else {
     char* buf = Buffer::Data(args[0]);
     size_t buflen = Buffer::Length(args[0]);
@@ -3214,19 +3191,10 @@ void Sign::SignUpdate(const FunctionCallbackInfo<Value>& args) {
   // Only copy the data if we have to, because it's a string
   Error err;
   if (args[0]->IsString()) {
-    Local<String> string = args[0].As<String>();
-    enum encoding encoding = ParseEncoding(env->isolate(), args[1], BINARY);
-    if (!StringBytes::IsValidString(env->isolate(), string, encoding))
-      return env->ThrowTypeError("Bad input string");
-    size_t buflen = StringBytes::StorageSize(env->isolate(), string, encoding);
-    char* buf = new char[buflen];
-    size_t written = StringBytes::Write(env->isolate(),
-                                        buf,
-                                        buflen,
-                                        string,
-                                        encoding);
-    err = sign->SignUpdate(buf, written);
-    delete[] buf;
+    StringBytes::InlineDecoder decoder;
+    if (!decoder.Decode(env, args[0].As<String>(), args[1], BINARY))
+      return;
+    err = sign->SignUpdate(decoder.out(), decoder.size());
   } else {
     char* buf = Buffer::Data(args[0]);
     size_t buflen = Buffer::Length(args[0]);
@@ -3395,19 +3363,10 @@ void Verify::VerifyUpdate(const FunctionCallbackInfo<Value>& args) {
   // Only copy the data if we have to, because it's a string
   Error err;
   if (args[0]->IsString()) {
-    Local<String> string = args[0].As<String>();
-    enum encoding encoding = ParseEncoding(env->isolate(), args[1], BINARY);
-    if (!StringBytes::IsValidString(env->isolate(), string, encoding))
-      return env->ThrowTypeError("Bad input string");
-    size_t buflen = StringBytes::StorageSize(env->isolate(), string, encoding);
-    char* buf = new char[buflen];
-    size_t written = StringBytes::Write(env->isolate(),
-                                        buf,
-                                        buflen,
-                                        string,
-                                        encoding);
-    err = verify->VerifyUpdate(buf, written);
-    delete[] buf;
+    StringBytes::InlineDecoder decoder;
+    if (!decoder.Decode(env, args[0].As<String>(), args[1], BINARY))
+      return;
+    err = verify->VerifyUpdate(decoder.out(), decoder.size());
   } else {
     char* buf = Buffer::Data(args[0]);
     size_t buflen = Buffer::Length(args[0]);
@@ -3561,12 +3520,12 @@ bool PublicKeyCipher::Cipher(const char* key_pem,
 
   // Check if this is a PKCS#8 or RSA public key before trying as X.509 and
   // private key.
-  if (operation == kEncrypt &&
+  if (operation == kPublic &&
       strncmp(key_pem, PUBLIC_KEY_PFX, PUBLIC_KEY_PFX_LEN) == 0) {
     pkey = PEM_read_bio_PUBKEY(bp, nullptr, nullptr, nullptr);
     if (pkey == nullptr)
       goto exit;
-  } else if (operation == kEncrypt &&
+  } else if (operation == kPublic &&
              strncmp(key_pem, PUBRSA_KEY_PFX, PUBRSA_KEY_PFX_LEN) == 0) {
     RSA* rsa = PEM_read_bio_RSAPublicKey(bp, nullptr, nullptr, nullptr);
     if (rsa) {
@@ -3577,7 +3536,7 @@ bool PublicKeyCipher::Cipher(const char* key_pem,
     }
     if (pkey == nullptr)
       goto exit;
-  } else if (operation == kEncrypt &&
+  } else if (operation == kPublic &&
              strncmp(key_pem, CERTIFICATE_PFX, CERTIFICATE_PFX_LEN) == 0) {
     x509 = PEM_read_bio_X509(bp, nullptr, CryptoPemCallback, nullptr);
     if (x509 == nullptr)
@@ -5038,13 +4997,21 @@ void InitCrypto(Handle<Object> target,
   env->SetMethod(target, "getCiphers", GetCiphers);
   env->SetMethod(target, "getHashes", GetHashes);
   env->SetMethod(target, "publicEncrypt",
-                 PublicKeyCipher::Cipher<PublicKeyCipher::kEncrypt,
+                 PublicKeyCipher::Cipher<PublicKeyCipher::kPublic,
                                          EVP_PKEY_encrypt_init,
                                          EVP_PKEY_encrypt>);
   env->SetMethod(target, "privateDecrypt",
-                 PublicKeyCipher::Cipher<PublicKeyCipher::kDecrypt,
+                 PublicKeyCipher::Cipher<PublicKeyCipher::kPrivate,
                                          EVP_PKEY_decrypt_init,
                                          EVP_PKEY_decrypt>);
+  env->SetMethod(target, "privateEncrypt",
+                 PublicKeyCipher::Cipher<PublicKeyCipher::kPrivate,
+                                         EVP_PKEY_sign_init,
+                                         EVP_PKEY_sign>);
+  env->SetMethod(target, "publicDecrypt",
+                 PublicKeyCipher::Cipher<PublicKeyCipher::kPublic,
+                                         EVP_PKEY_verify_recover_init,
+                                         EVP_PKEY_verify_recover>);
 }
 
 }  // namespace crypto

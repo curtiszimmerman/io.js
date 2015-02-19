@@ -2,6 +2,7 @@
   'variables': {
     'v8_use_snapshot%': 'false',
     'node_use_dtrace%': 'false',
+    'node_use_lttng%': 'false',
     'node_use_etw%': 'false',
     'node_use_perfctr%': 'false',
     'node_has_winsdk%': 'false',
@@ -143,12 +144,12 @@
         'src/node_wrap.h',
         'src/node_i18n.h',
         'src/pipe_wrap.h',
-        'src/queue.h',
         'src/smalloc.h',
         'src/tty_wrap.h',
         'src/tcp_wrap.h',
         'src/udp_wrap.h',
-        'src/req_wrap.h',
+        'src/req-wrap.h',
+        'src/req-wrap-inl.h',
         'src/string_bytes.h',
         'src/stream_wrap.h',
         'src/tree.h',
@@ -259,6 +260,14 @@
               ]
             }
           ] ]
+        } ],
+        [ 'node_use_lttng=="true"', {
+          'defines': [ 'HAVE_LTTNG=1' ],
+          'include_dirs': [ '<(SHARED_INTERMEDIATE_DIR)' ],
+          'libraries': [ '-llttng-ust' ],
+          'sources': [
+            'src/node_lttng.cc'
+          ],
         } ],
         [ 'node_use_mdb=="true"', {
           'dependencies': [ 'node_mdb' ],
@@ -450,6 +459,9 @@
             [ 'node_use_dtrace=="false" and node_use_etw=="false"', {
               'inputs': [ 'src/notrace_macros.py' ]
             }],
+            ['node_use_lttng=="false"', {
+              'inputs': [ 'src/nolttng_macros.py' ]
+            }],
             [ 'node_use_perfctr=="false"', {
               'inputs': [ 'src/perfctr_macros.py' ]
             }]
@@ -526,10 +538,10 @@
             {
               'action_name': 'node_dtrace_provider_o',
               'inputs': [
-                '<(OBJ_DIR)/node/src/node_dtrace.o',
+                '<(OBJ_DIR)/iojs/src/node_dtrace.o',
               ],
               'outputs': [
-                '<(OBJ_DIR)/node/src/node_dtrace_provider.o'
+                '<(OBJ_DIR)/iojs/src/node_dtrace_provider.o'
               ],
               'action': [ 'dtrace', '-G', '-xnolibs', '-s', 'src/node_provider.d',
                 '<@(_inputs)', '-o', '<@(_outputs)' ]
@@ -579,7 +591,7 @@
                 '<(SHARED_INTERMEDIATE_DIR)/v8constants.h'
               ],
               'outputs': [
-                '<(OBJ_DIR)/node/src/node_dtrace_ustack.o'
+                '<(OBJ_DIR)/iojs/src/node_dtrace_ustack.o'
               ],
               'conditions': [
                 [ 'target_arch=="ia32"', {

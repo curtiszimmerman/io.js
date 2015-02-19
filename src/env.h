@@ -3,11 +3,12 @@
 
 #include "ares.h"
 #include "debug-agent.h"
+#include "handle_wrap.h"
+#include "req-wrap.h"
 #include "tree.h"
 #include "util.h"
 #include "uv.h"
 #include "v8.h"
-#include "queue.h"
 
 #include <stdint.h>
 
@@ -61,6 +62,7 @@ namespace node {
   V(cwd_string, "cwd")                                                        \
   V(debug_port_string, "debugPort")                                           \
   V(debug_string, "debug")                                                    \
+  V(dest_string, "dest")                                                      \
   V(detached_string, "detached")                                              \
   V(dev_string, "dev")                                                        \
   V(disposed_string, "_disposed")                                             \
@@ -332,13 +334,12 @@ class Environment {
         : handle_(handle),
           cb_(cb),
           arg_(arg) {
-      QUEUE_INIT(&handle_cleanup_queue_);
     }
 
     uv_handle_t* handle_;
     HandleCleanupCb cb_;
     void* arg_;
-    QUEUE handle_cleanup_queue_;
+    ListNode<HandleCleanup> handle_cleanup_queue_;
   };
 
   static inline Environment* GetCurrent(v8::Isolate* isolate);
@@ -394,6 +395,9 @@ class Environment {
   inline bool using_domains() const;
   inline void set_using_domains(bool value);
 
+  inline bool using_asyncwrap() const;
+  inline void set_using_asyncwrap(bool value);
+
   inline bool printed_error() const;
   inline void set_printed_error(bool value);
 
@@ -407,7 +411,8 @@ class Environment {
   inline void ThrowUVException(int errorno,
                                const char* syscall = nullptr,
                                const char* message = nullptr,
-                               const char* path = nullptr);
+                               const char* path = nullptr,
+                               const char* dest = nullptr);
 
   // Convenience methods for contextify
   inline static void ThrowError(v8::Isolate* isolate, const char* errmsg);
@@ -448,8 +453,12 @@ class Environment {
     return &debugger_agent_;
   }
 
-  inline QUEUE* handle_wrap_queue() { return &handle_wrap_queue_; }
-  inline QUEUE* req_wrap_queue() { return &req_wrap_queue_; }
+  typedef ListHead<HandleWrap, &HandleWrap::handle_wrap_queue_> HandleWrapQueue;
+  typedef ListHead<ReqWrap<uv_req_t>, &ReqWrap<uv_req_t>::req_wrap_queue_>
+          ReqWrapQueue;
+
+  inline HandleWrapQueue* handle_wrap_queue() { return &handle_wrap_queue_; }
+  inline ReqWrapQueue* req_wrap_queue() { return &req_wrap_queue_; }
 
  private:
   static const int kIsolateSlot = NODE_ISOLATE_SLOT;
@@ -477,12 +486,14 @@ class Environment {
   ares_task_list cares_task_list_;
   bool using_smalloc_alloc_cb_;
   bool using_domains_;
+  bool using_asyncwrap_;
   bool printed_error_;
   debugger::Agent debugger_agent_;
 
-  QUEUE handle_wrap_queue_;
-  QUEUE req_wrap_queue_;
-  QUEUE handle_cleanup_queue_;
+  HandleWrapQueue handle_wrap_queue_;
+  ReqWrapQueue req_wrap_queue_;
+  ListHead<HandleCleanup,
+           &HandleCleanup::handle_cleanup_queue_> handle_cleanup_queue_;
   int handle_cleanup_waiting_;
 
   v8::Persistent<v8::External> external_;

@@ -23,13 +23,18 @@
 #include "node_dtrace.h"
 #endif
 
+#if defined HAVE_LTTNG
+#include "node_lttng.h"
+#endif
+
 #include "ares.h"
 #include "async-wrap.h"
 #include "async-wrap-inl.h"
 #include "env.h"
 #include "env-inl.h"
 #include "handle_wrap.h"
-#include "req_wrap.h"
+#include "req-wrap.h"
+#include "req-wrap-inl.h"
 #include "string_bytes.h"
 #include "util.h"
 #include "uv.h"
@@ -698,11 +703,10 @@ void ThrowUVException(v8::Isolate* isolate,
                       int errorno,
                       const char* syscall,
                       const char* message,
-                      const char* path) {
-  Environment::GetCurrent(isolate)->ThrowErrnoException(errorno,
-                                                        syscall,
-                                                        message,
-                                                        path);
+                      const char* path,
+                      const char* dest) {
+  Environment::GetCurrent(isolate)
+      ->ThrowUVException(errorno, syscall, message, path, dest);
 }
 
 
@@ -752,64 +756,78 @@ Local<Value> ErrnoException(Isolate* isolate,
 }
 
 
-// hack alert! copy of ErrnoException, tuned for uv errors
+static Local<String> StringFromPath(Isolate* isolate, const char* path) {
+#ifdef _WIN32
+  if (strncmp(path, "\\\\?\\UNC\\", 8) == 0) {
+    return String::Concat(FIXED_ONE_BYTE_STRING(isolate, "\\\\"),
+                          String::NewFromUtf8(isolate, path + 8));
+  } else if (strncmp(path, "\\\\?\\", 4) == 0) {
+    return String::NewFromUtf8(isolate, path + 4);
+  }
+#endif
+
+  return String::NewFromUtf8(isolate, path);
+}
+
+
 Local<Value> UVException(Isolate* isolate,
                          int errorno,
-                         const char *syscall,
-                         const char *msg,
-                         const char *path) {
+                         const char* syscall,
+                         const char* msg,
+                         const char* path) {
+  return UVException(isolate, errorno, syscall, msg, path, nullptr);
+}
+
+
+Local<Value> UVException(Isolate* isolate,
+                         int errorno,
+                         const char* syscall,
+                         const char* msg,
+                         const char* path,
+                         const char* dest) {
   Environment* env = Environment::GetCurrent(isolate);
 
   if (!msg || !msg[0])
     msg = uv_strerror(errorno);
 
-  Local<String> estring = OneByteString(env->isolate(), uv_err_name(errorno));
-  Local<String> message = OneByteString(env->isolate(), msg);
-  Local<String> cons1 =
-      String::Concat(estring, FIXED_ONE_BYTE_STRING(env->isolate(), ", "));
-  Local<String> cons2 = String::Concat(cons1, message);
+  Local<String> js_code = OneByteString(isolate, uv_err_name(errorno));
+  Local<String> js_syscall = OneByteString(isolate, syscall);
+  Local<String> js_path;
+  Local<String> js_dest;
 
-  Local<Value> e;
-
-  Local<String> path_str;
-
-  if (path) {
-#ifdef _WIN32
-    if (strncmp(path, "\\\\?\\UNC\\", 8) == 0) {
-      path_str = String::Concat(FIXED_ONE_BYTE_STRING(env->isolate(), "\\\\"),
-                                String::NewFromUtf8(env->isolate(), path + 8));
-    } else if (strncmp(path, "\\\\?\\", 4) == 0) {
-      path_str = String::NewFromUtf8(env->isolate(), path + 4);
-    } else {
-      path_str = String::NewFromUtf8(env->isolate(), path);
-    }
-#else
-    path_str = String::NewFromUtf8(env->isolate(), path);
-#endif
-
-    Local<String> cons3 =
-        String::Concat(cons2, FIXED_ONE_BYTE_STRING(env->isolate(), " '"));
-    Local<String> cons4 =
-        String::Concat(cons3, path_str);
-    Local<String> cons5 =
-        String::Concat(cons4, FIXED_ONE_BYTE_STRING(env->isolate(), "'"));
-    e = Exception::Error(cons5);
-  } else {
-    e = Exception::Error(cons2);
-  }
-
-  Local<Object> obj = e->ToObject(env->isolate());
-  // TODO(piscisaureus) errno should probably go
-  obj->Set(env->errno_string(), Integer::New(env->isolate(), errorno));
-  obj->Set(env->code_string(), estring);
+  Local<String> js_msg = js_code;
+  js_msg = String::Concat(js_msg, FIXED_ONE_BYTE_STRING(isolate, ": "));
+  js_msg = String::Concat(js_msg, OneByteString(isolate, msg));
+  js_msg = String::Concat(js_msg, FIXED_ONE_BYTE_STRING(isolate, ", "));
+  js_msg = String::Concat(js_msg, js_syscall);
 
   if (path != nullptr) {
-    obj->Set(env->path_string(), path_str);
+    js_path = StringFromPath(isolate, path);
+
+    js_msg = String::Concat(js_msg, FIXED_ONE_BYTE_STRING(isolate, " '"));
+    js_msg = String::Concat(js_msg, js_path);
+    js_msg = String::Concat(js_msg, FIXED_ONE_BYTE_STRING(isolate, "'"));
   }
 
-  if (syscall != nullptr) {
-    obj->Set(env->syscall_string(), OneByteString(env->isolate(), syscall));
+  if (dest != nullptr) {
+    js_dest = StringFromPath(isolate, dest);
+
+    js_msg = String::Concat(js_msg, FIXED_ONE_BYTE_STRING(isolate, " -> '"));
+    js_msg = String::Concat(js_msg, js_dest);
+    js_msg = String::Concat(js_msg, FIXED_ONE_BYTE_STRING(isolate, "'"));
   }
+
+  Local<Object> e = Exception::Error(js_msg)->ToObject(isolate);
+
+  // TODO(piscisaureus) errno should probably go; the user has no way of
+  // knowing which uv errno value maps to which error.
+  e->Set(env->errno_string(), Integer::New(isolate, errorno));
+  e->Set(env->code_string(), js_code);
+  e->Set(env->syscall_string(), js_syscall);
+  if (!js_path.IsEmpty())
+    e->Set(env->path_string(), js_path);
+  if (!js_dest.IsEmpty())
+    e->Set(env->dest_string(), js_dest);
 
   return e;
 }
@@ -1012,7 +1030,7 @@ Handle<Value> MakeCallback(Environment* env,
     try_catch.SetVerbose(false);
     env->async_hooks_pre_function()->Call(object, 0, nullptr);
     if (try_catch.HasCaught())
-      FatalError("node:;MakeCallback", "pre hook threw");
+      FatalError("node::MakeCallback", "pre hook threw");
     try_catch.SetVerbose(true);
   }
 
@@ -1148,53 +1166,93 @@ Handle<Value> MakeCallback(Isolate* isolate,
 }
 
 
-enum encoding ParseEncoding(Isolate* isolate,
-                            Handle<Value> encoding_v,
-                            enum encoding _default) {
-  HandleScope scope(isolate);
+enum encoding ParseEncoding(const char* encoding,
+                            enum encoding default_encoding) {
+  switch (encoding[0]) {
+    case 'u':
+      // utf8, utf16le
+      if (encoding[1] == 't' && encoding[2] == 'f') {
+        // Skip `-`
+        encoding += encoding[3] == '-' ? 4 : 3;
+        if (encoding[0] == '8' && encoding[1] == '\0')
+          return UTF8;
+        if (strncmp(encoding, "16le", 4) == 0)
+          return UCS2;
 
-  if (!encoding_v->IsString())
-    return _default;
+      // ucs2
+      } else if (encoding[1] == 'c' && encoding[2] == 's') {
+        encoding += encoding[3] == '-' ? 4 : 3;
+        if (encoding[0] == '2' && encoding[1] == '\0')
+          return UCS2;
+      }
+      break;
+    case 'b':
+      // binary
+      if (encoding[1] == 'i') {
+        if (strncmp(encoding + 2, "nary", 4) == 0)
+          return BINARY;
 
-  node::Utf8Value encoding(isolate, encoding_v);
+      // buffer
+      } else if (encoding[1] == 'u') {
+        if (strncmp(encoding + 2, "ffer", 4) == 0)
+          return BUFFER;
+      }
+      break;
+    case '\0':
+      return default_encoding;
+    default:
+      break;
+  }
 
-  if (strcasecmp(*encoding, "utf8") == 0) {
+  if (strcasecmp(encoding, "utf8") == 0) {
     return UTF8;
-  } else if (strcasecmp(*encoding, "utf-8") == 0) {
+  } else if (strcasecmp(encoding, "utf-8") == 0) {
     return UTF8;
-  } else if (strcasecmp(*encoding, "ascii") == 0) {
+  } else if (strcasecmp(encoding, "ascii") == 0) {
     return ASCII;
-  } else if (strcasecmp(*encoding, "base64") == 0) {
+  } else if (strcasecmp(encoding, "base64") == 0) {
     return BASE64;
-  } else if (strcasecmp(*encoding, "ucs2") == 0) {
+  } else if (strcasecmp(encoding, "ucs2") == 0) {
     return UCS2;
-  } else if (strcasecmp(*encoding, "ucs-2") == 0) {
+  } else if (strcasecmp(encoding, "ucs-2") == 0) {
     return UCS2;
-  } else if (strcasecmp(*encoding, "utf16le") == 0) {
+  } else if (strcasecmp(encoding, "utf16le") == 0) {
     return UCS2;
-  } else if (strcasecmp(*encoding, "utf-16le") == 0) {
+  } else if (strcasecmp(encoding, "utf-16le") == 0) {
     return UCS2;
-  } else if (strcasecmp(*encoding, "binary") == 0) {
+  } else if (strcasecmp(encoding, "binary") == 0) {
     return BINARY;
-  } else if (strcasecmp(*encoding, "buffer") == 0) {
+  } else if (strcasecmp(encoding, "buffer") == 0) {
     return BUFFER;
-  } else if (strcasecmp(*encoding, "hex") == 0) {
+  } else if (strcasecmp(encoding, "hex") == 0) {
     return HEX;
-  } else if (strcasecmp(*encoding, "raw") == 0) {
+  } else if (strcasecmp(encoding, "raw") == 0) {
     if (!no_deprecation) {
       fprintf(stderr, "'raw' (array of integers) has been removed. "
                       "Use 'binary'.\n");
     }
     return BINARY;
-  } else if (strcasecmp(*encoding, "raws") == 0) {
+  } else if (strcasecmp(encoding, "raws") == 0) {
     if (!no_deprecation) {
       fprintf(stderr, "'raws' encoding has been renamed to 'binary'. "
                       "Please update your code.\n");
     }
     return BINARY;
   } else {
-    return _default;
+    return default_encoding;
   }
+}
+
+
+enum encoding ParseEncoding(Isolate* isolate,
+                            Handle<Value> encoding_v,
+                            enum encoding default_encoding) {
+  if (!encoding_v->IsString())
+    return default_encoding;
+
+  node::Utf8Value encoding(isolate, encoding_v);
+
+  return ParseEncoding(*encoding, default_encoding);
 }
 
 Local<Value> Encode(Isolate* isolate,
@@ -1429,15 +1487,11 @@ static void GetActiveRequests(const FunctionCallbackInfo<Value>& args) {
   Environment* env = Environment::GetCurrent(args);
 
   Local<Array> ary = Array::New(args.GetIsolate());
-  QUEUE* q = nullptr;
   int i = 0;
 
-  QUEUE_FOREACH(q, env->req_wrap_queue()) {
-    ReqWrap<uv_req_t>* w = ContainerOf(&ReqWrap<uv_req_t>::req_wrap_queue_, q);
-    if (w->persistent().IsEmpty())
-      continue;
-    ary->Set(i++, w->object());
-  }
+  for (auto w : *env->req_wrap_queue())
+    if (w->persistent().IsEmpty() == false)
+      ary->Set(i++, w->object());
 
   args.GetReturnValue().Set(ary);
 }
@@ -1449,13 +1503,11 @@ void GetActiveHandles(const FunctionCallbackInfo<Value>& args) {
   Environment* env = Environment::GetCurrent(args);
 
   Local<Array> ary = Array::New(env->isolate());
-  QUEUE* q = nullptr;
   int i = 0;
 
   Local<String> owner_sym = env->owner_string();
 
-  QUEUE_FOREACH(q, env->handle_wrap_queue()) {
-    HandleWrap* w = ContainerOf(&HandleWrap::handle_wrap_queue_, q);
+  for (auto w : *env->handle_wrap_queue()) {
     if (w->persistent().IsEmpty() || (w->flags_ & HandleWrap::kUnref))
       continue;
     Local<Object> object = w->object();
@@ -1630,23 +1682,21 @@ static const char* name_by_gid(gid_t gid) {
 #endif
 
 
-static uid_t uid_by_name(Handle<Value> value) {
+static uid_t uid_by_name(Isolate* isolate, Handle<Value> value) {
   if (value->IsUint32()) {
     return static_cast<uid_t>(value->Uint32Value());
   } else {
-    // TODO(trevnorris): Fix to not use GetCurrent().
-    node::Utf8Value name(Isolate::GetCurrent(), value);
+    node::Utf8Value name(isolate, value);
     return uid_by_name(*name);
   }
 }
 
 
-static gid_t gid_by_name(Handle<Value> value) {
+static gid_t gid_by_name(Isolate* isolate, Handle<Value> value) {
   if (value->IsUint32()) {
     return static_cast<gid_t>(value->Uint32Value());
   } else {
-    // TODO(trevnorris): Fix to not use GetCurrent().
-    node::Utf8Value name(Isolate::GetCurrent(), value);
+    node::Utf8Value name(isolate, value);
     return gid_by_name(*name);
   }
 }
@@ -1671,7 +1721,7 @@ static void SetGid(const FunctionCallbackInfo<Value>& args) {
     return env->ThrowTypeError("setgid argument must be a number or a string");
   }
 
-  gid_t gid = gid_by_name(args[0]);
+  gid_t gid = gid_by_name(env->isolate(), args[0]);
 
   if (gid == gid_not_found) {
     return env->ThrowError("setgid group id does not exist");
@@ -1690,7 +1740,7 @@ static void SetUid(const FunctionCallbackInfo<Value>& args) {
     return env->ThrowTypeError("setuid argument must be a number or a string");
   }
 
-  uid_t uid = uid_by_name(args[0]);
+  uid_t uid = uid_by_name(env->isolate(), args[0]);
 
   if (uid == uid_not_found) {
     return env->ThrowError("setuid user id does not exist");
@@ -1752,7 +1802,7 @@ static void SetGroups(const FunctionCallbackInfo<Value>& args) {
   gid_t* groups = new gid_t[size];
 
   for (size_t i = 0; i < size; i++) {
-    gid_t gid = gid_by_name(groups_list->Get(i));
+    gid_t gid = gid_by_name(env->isolate(), groups_list->Get(i));
 
     if (gid == gid_not_found) {
       delete[] groups;
@@ -1799,7 +1849,7 @@ static void InitGroups(const FunctionCallbackInfo<Value>& args) {
     return env->ThrowError("initgroups user not found");
   }
 
-  extra_group = gid_by_name(args[1]);
+  extra_group = gid_by_name(env->isolate(), args[1]);
 
   if (extra_group == gid_not_found) {
     if (must_free)
@@ -2818,6 +2868,10 @@ void LoadEnvironment(Environment* env) {
   InitDTrace(env, global);
 #endif
 
+#if defined HAVE_LTTNG
+  InitLTTNG(env, global);
+#endif
+
 #if defined HAVE_PERFCTR
   InitPerfCounters(env, global);
 #endif
@@ -3096,22 +3150,6 @@ static void DispatchDebugMessagesAsyncCallback(uv_async_t* handle) {
 
 
 #ifdef __POSIX__
-static volatile sig_atomic_t caught_early_debug_signal;
-
-
-static void EarlyDebugSignalHandler(int signo) {
-  caught_early_debug_signal = 1;
-}
-
-
-static void InstallEarlyDebugSignalHandler() {
-  struct sigaction sa;
-  memset(&sa, 0, sizeof(sa));
-  sa.sa_handler = EarlyDebugSignalHandler;
-  sigaction(SIGUSR1, &sa, nullptr);
-}
-
-
 static void EnableDebugSignalHandler(int signo) {
   // Call only async signal-safe functions here!
   v8::Debug::DebugBreak(*static_cast<Isolate* volatile*>(&node_isolate));
@@ -3152,10 +3190,11 @@ void DebugProcess(const FunctionCallbackInfo<Value>& args) {
 static int RegisterDebugSignalHandler() {
   // FIXME(bnoordhuis) Should be per-isolate or per-context, not global.
   RegisterSignalHandler(SIGUSR1, EnableDebugSignalHandler);
-  // If we caught a SIGUSR1 during the bootstrap process, re-raise it
-  // now that the debugger infrastructure is in place.
-  if (caught_early_debug_signal)
-    raise(SIGUSR1);
+  // Unblock SIGUSR1.  A pending SIGUSR1 signal will now be delivered.
+  sigset_t sigmask;
+  sigemptyset(&sigmask);
+  sigaddset(&sigmask, SIGUSR1);
+  CHECK_EQ(0, pthread_sigmask(SIG_UNBLOCK, &sigmask, nullptr));
   return 0;
 }
 #endif  // __POSIX__
@@ -3322,6 +3361,73 @@ static void DebugEnd(const FunctionCallbackInfo<Value>& args) {
 }
 
 
+inline void PlatformInit() {
+#ifdef __POSIX__
+  sigset_t sigmask;
+  sigemptyset(&sigmask);
+  sigaddset(&sigmask, SIGUSR1);
+  const int err = pthread_sigmask(SIG_SETMASK, &sigmask, nullptr);
+
+  // Make sure file descriptors 0-2 are valid before we start logging anything.
+  for (int fd = STDIN_FILENO; fd <= STDERR_FILENO; fd += 1) {
+    struct stat ignored;
+    if (fstat(fd, &ignored) == 0)
+      continue;
+    // Anything but EBADF means something is seriously wrong.  We don't
+    // have to special-case EINTR, fstat() is not interruptible.
+    if (errno != EBADF)
+      abort();
+    if (fd != open("/dev/null", O_RDWR))
+      abort();
+  }
+
+  CHECK_EQ(err, 0);
+
+  // Restore signal dispositions, the parent process may have changed them.
+  struct sigaction act;
+  memset(&act, 0, sizeof(act));
+
+  // The hard-coded upper limit is because NSIG is not very reliable; on Linux,
+  // it evaluates to 32, 34 or 64, depending on whether RT signals are enabled.
+  // Counting up to SIGRTMIN doesn't work for the same reason.
+  for (unsigned nr = 1; nr < 32; nr += 1) {
+    if (nr == SIGKILL || nr == SIGSTOP)
+      continue;
+    act.sa_handler = (nr == SIGPIPE) ? SIG_IGN : SIG_DFL;
+    CHECK_EQ(0, sigaction(nr, &act, nullptr));
+  }
+
+  RegisterSignalHandler(SIGINT, SignalExit, true);
+  RegisterSignalHandler(SIGTERM, SignalExit, true);
+
+  // Block SIGPROF signals when sleeping in epoll_wait/kevent/etc.  Avoids the
+  // performance penalty of frequent EINTR wakeups when the profiler is running.
+  uv_loop_configure(uv_default_loop(), UV_LOOP_BLOCK_SIGNAL, SIGPROF);
+
+  // Raise the open file descriptor limit.
+  struct rlimit lim;
+  if (getrlimit(RLIMIT_NOFILE, &lim) == 0 && lim.rlim_cur != lim.rlim_max) {
+    // Do a binary search for the limit.
+    rlim_t min = lim.rlim_cur;
+    rlim_t max = 1 << 20;
+    // But if there's a defined upper bound, don't search, just set it.
+    if (lim.rlim_max != RLIM_INFINITY) {
+      min = lim.rlim_max;
+      max = lim.rlim_max;
+    }
+    do {
+      lim.rlim_cur = min + (max - min) / 2;
+      if (setrlimit(RLIMIT_NOFILE, &lim)) {
+        max = lim.rlim_cur;
+      } else {
+        min = lim.rlim_cur;
+      }
+    } while (min + 1 < max);
+  }
+#endif  // __POSIX__
+}
+
+
 void Init(int* argc,
           const char** argv,
           int* exec_argc,
@@ -3395,35 +3501,6 @@ void Init(int* argc,
   }
 
   V8::SetArrayBufferAllocator(&ArrayBufferAllocator::the_singleton);
-
-#ifdef __POSIX__
-  // Raise the open file descriptor limit.
-  {  // NOLINT (whitespace/braces)
-    struct rlimit lim;
-    if (getrlimit(RLIMIT_NOFILE, &lim) == 0 && lim.rlim_cur != lim.rlim_max) {
-      // Do a binary search for the limit.
-      rlim_t min = lim.rlim_cur;
-      rlim_t max = 1 << 20;
-      // But if there's a defined upper bound, don't search, just set it.
-      if (lim.rlim_max != RLIM_INFINITY) {
-        min = lim.rlim_max;
-        max = lim.rlim_max;
-      }
-      do {
-        lim.rlim_cur = min + (max - min) / 2;
-        if (setrlimit(RLIMIT_NOFILE, &lim)) {
-          max = lim.rlim_cur;
-        } else {
-          min = lim.rlim_cur;
-        }
-      } while (min + 1 < max);
-    }
-  }
-  // Ignore SIGPIPE
-  RegisterSignalHandler(SIGPIPE, SIG_IGN);
-  RegisterSignalHandler(SIGINT, SignalExit, true);
-  RegisterSignalHandler(SIGTERM, SignalExit, true);
-#endif  // __POSIX__
 
   if (!use_debug_agent) {
     RegisterDebugSignalHandler();
@@ -3610,15 +3687,12 @@ Environment* CreateEnvironment(Isolate* isolate,
 
 
 int Start(int argc, char** argv) {
+  PlatformInit();
+
   const char* replaceInvalid = secure_getenv("NODE_INVALID_UTF8");
 
   if (replaceInvalid == nullptr)
     WRITE_UTF8_FLAGS |= String::REPLACE_INVALID_UTF8;
-
-#if !defined(_WIN32)
-  // Try hard not to lose SIGUSR1 signals during the bootstrap process.
-  InstallEarlyDebugSignalHandler();
-#endif
 
   CHECK_GT(argc, 0);
 

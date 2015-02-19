@@ -29,7 +29,7 @@ Here is the synchronous version:
 
     var fs = require('fs');
 
-    fs.unlinkSync('/tmp/hello')
+    fs.unlinkSync('/tmp/hello');
     console.log('successfully deleted /tmp/hello');
 
 With the asynchronous methods there is no guaranteed ordering. So the
@@ -72,7 +72,7 @@ site, set the NODE_DEBUG environment variable:
     }
     bad();
 
-    $ env NODE_DEBUG=fs node script.js
+    $ env NODE_DEBUG=fs iojs script.js
     fs.js:66
             throw err;
                   ^
@@ -208,7 +208,7 @@ the completion callback.
 
 Synchronous link(2).
 
-## fs.symlink(srcpath, dstpath[, type], callback)
+## fs.symlink(destination, path[, type], callback)
 
 Asynchronous symlink(2). No arguments other than a possible exception are given
 to the completion callback.
@@ -217,7 +217,7 @@ is `'file'`) and is only available on Windows (ignored on other platforms).
 Note that Windows junction points require the destination path to be absolute.  When using
 `'junction'`, the `destination` argument will automatically be normalized to absolute path.
 
-## fs.symlinkSync(srcpath, dstpath[, type])
+## fs.symlinkSync(destination, path[, type])
 
 Synchronous symlink(2).
 
@@ -498,7 +498,7 @@ to `'utf8'`.
 
 Example:
 
-    fs.writeFile('message.txt', 'Hello Node', function (err) {
+    fs.writeFile('message.txt', 'Hello io.js', function (err) {
       if (err) throw err;
       console.log('It\'s saved!');
     });
@@ -517,7 +517,7 @@ The synchronous version of `fs.writeFile`.
   * `flag` {String} default = `'a'`
 * `callback` {Function}
 
-Asynchronously append data to a file, creating the file if it not yet exists.
+Asynchronously append data to a file, creating the file if it does not yet exist.
 `data` can be a string or a buffer.
 
 Example:
@@ -757,7 +757,7 @@ The times in the stat object have the following semantics:
   an earlier value than the current `birthtime` using the `utimes(2)`
   system call.
 
-Prior to Node v0.12, the `ctime` held the `birthtime` on Windows
+Prior to io.js v1.0 and Node v0.12, the `ctime` held the `birthtime` on Windows
 systems.  Note that as of v0.12, `ctime` is not "creation time", and
 on Unix systems, it never was.
 
