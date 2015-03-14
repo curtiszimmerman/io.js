@@ -1,6 +1,6 @@
 # util
 
-    Stability: 4 - API Frozen
+    Stability: 2 - Stable
 
 These functions are in the module `'util'`. Use `require('util')` to
 access them.
@@ -54,7 +54,7 @@ argument. Supported placeholders are:
 * `%s` - String.
 * `%d` - Number (both integer and float).
 * `%j` - JSON.  Replaced with the string `'[Circular]'` if the argument
-         contains circular references.
+contains circular references.
 * `%%` - single percent sign (`'%'`). This does not consume an argument.
 
 If the placeholder does not have a corresponding argument, the placeholder is

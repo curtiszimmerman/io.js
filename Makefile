@@ -106,8 +106,8 @@ test-all: test-build test/gc/node_modules/weak/build/Release/weakref.node
 test-all-valgrind: test-build
 	$(PYTHON) tools/test.py --mode=debug,release --valgrind
 
-test-ci: test-build
-	$(PYTHON) tools/test.py -J parallel sequential message addons
+test-ci:
+	$(PYTHON) tools/test.py -p tap --logfile test.tap -J parallel sequential message
 
 test-release: test-build
 	$(PYTHON) tools/test.py --mode=release
@@ -121,7 +121,7 @@ test-message: test-build
 test-simple: all
 	$(PYTHON) tools/test.py parallel sequential
 
-test-pummel: all wrk
+test-pummel: all
 	$(PYTHON) tools/test.py pummel
 
 test-internet: all
@@ -247,7 +247,7 @@ release-only:
 	else \
 	  echo "" >&2 ; \
 		echo "#NODE_VERSION_IS_RELEASE is set to $(RELEASE)." >&2 ; \
-	  echo "Did you remember to update src/node_version.cc?" >&2 ; \
+	  echo "Did you remember to update src/node_version.h?" >&2 ; \
 	  echo "" >&2 ; \
 		exit 1 ; \
 	fi
@@ -277,12 +277,14 @@ $(PKG): release-only
 	SIGN="$(INT_SIGN)" PKG="$(PKG)" bash tools/osx-productsign.sh
 
 $(TARBALL): release-only $(NODE_EXE) doc
-	git archive --format=tar --prefix=$(TARNAME)/ HEAD | tar xf -
+	git checkout-index -a -f --prefix=$(TARNAME)/
 	mkdir -p $(TARNAME)/doc/api
 	cp doc/iojs.1 $(TARNAME)/doc/iojs.1
 	cp -r out/doc/api/* $(TARNAME)/doc/api/
-	rm -rf $(TARNAME)/deps/v8/test # too big
+	rm -rf $(TARNAME)/deps/v8/{test,samples,tools/profviz} # too big
 	rm -rf $(TARNAME)/doc/images # too big
+	rm -rf $(TARNAME)/deps/uv/{docs,samples,test}
+	rm -rf $(TARNAME)/deps/openssl/{doc,demos,test}
 	rm -rf $(TARNAME)/deps/zlib/contrib # too big, unused
 	find $(TARNAME)/ -type l | xargs rm # annoying on windows
 	tar -cf $(TARNAME).tar $(TARNAME)
@@ -326,13 +328,12 @@ $(PKGSRC): release-only
 
 pkgsrc: $(PKGSRC)
 
-wrkclean:
-	$(MAKE) -C tools/wrk/ clean
-	rm tools/wrk/wrk
-
-wrk: tools/wrk/wrk
-tools/wrk/wrk:
-	$(MAKE) -C tools/wrk/
+haswrk=$(shell which wrk > /dev/null 2>&1; echo $$?)
+wrk:
+ifneq ($(haswrk), 0)
+	@echo "please install wrk before proceeding. More information can be found in benchmark/README.md." >&2
+	@exit 1
+endif
 
 bench-net: all
 	@$(NODE) benchmark/common.js net
